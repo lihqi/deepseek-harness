@@ -81,6 +81,7 @@ SNAPSHOT_SESSION_ID = "advanced-executable"
 SNAPSHOT_DIRECT_CHILD_PROMPT = "Reply with exactly DIRECT_CHILD_OK and nothing else."
 SNAPSHOT_WORKFLOW_CHILD_PROMPT = "Reply with exactly WORKFLOW_CHILD_OK and nothing else."
 SNAPSHOT_FINAL_TEXT = "ADVANCED_EXECUTABLE_OK"
+CODEX_SEARCH_EVENT_TYPE = "web/codex-search-llm-request"
 RESTART_FIRST_PROMPT = "Complete the first isolated Python SDK process turn."
 RESTART_FIRST_TEXT = "PROCESS_ONE_OK"
 RESTART_SECOND_PROMPT = "Complete the second isolated Python SDK process turn."
@@ -221,8 +222,14 @@ def write_profile_patch(
     return path
 
 
-def write_advanced_profile_patch(root: Path, name: str, sessions: Path) -> Path:
+def write_advanced_profile_patch(
+    root: Path,
+    name: str,
+    sessions: Path,
+    include_codex_search_event: bool = False,
+) -> Path:
     """Write the shared custom, snapshot, and restart profile patch."""
+    fixture = Path(__file__).resolve().parent / "fixtures" / "codex-search-sdk-event.mjs"
     return write_profile_patch(root, name, sessions, [
         {"id": "tools", "config": {"mode": "both"}},
         {
@@ -247,6 +254,8 @@ def write_advanced_profile_patch(root: Path, name: str, sessions: Path) -> Path:
             {"id": "code-runtime", "name": "@deepseek-ai/dsh-code-runtime-worker-thread"},
             {"id": "cordis-host-runner", "name": "@deepseek-ai/dsh-cordis-host-runner"},
             {"id": "cordis-tool", "name": "@deepseek-ai/dsh-tool-cordis"},
+            *([{"id": "codex-search-sdk-event", "name": fixture.as_uri()}]
+              if include_codex_search_event else []),
         ]},
     ])
 
@@ -1178,7 +1187,9 @@ def smoke_sdk_snapshot(base_url: str, executable: Path, update_snapshots: bool) 
         root = Path(temporary).resolve()
         dsh_home = root / "home"
         sessions = dsh_home / "sessions"
-        patch = write_advanced_profile_patch(root, "snapshot.patch.yml", sessions)
+        patch = write_advanced_profile_patch(
+            root, "snapshot.patch.yml", sessions, include_codex_search_event=True,
+        )
         with DeepSeekHarness(
             provider="deepseek-official",
             model="smoke-model",
@@ -1202,6 +1213,19 @@ def smoke_sdk_snapshot(base_url: str, executable: Path, update_snapshots: bool) 
             raise AssertionError(f"advanced snapshot emitted unexpected subagent lifecycle: {methods}")
         if not any(event.get("type") == "tool/code-dispatch" for event in result.events):
             raise AssertionError("advanced snapshot emitted no tool/code-dispatch event")
+        codex_events = [
+            event for event in result.events if event.get("type") == CODEX_SEARCH_EVENT_TYPE
+        ]
+        if len(codex_events) != 1:
+            raise AssertionError(
+                f"advanced snapshot expected one {CODEX_SEARCH_EVENT_TYPE} event: {codex_events}"
+            )
+        if not any(
+            notification.method == "session.event"
+            and notification.payload.get("event", {}).get("type") == CODEX_SEARCH_EVENT_TYPE
+            for notification in result.notifications
+        ):
+            raise AssertionError("Python SDK notifications omitted the Codex search request event")
 
         logs = read_session_logs(sessions)
         child_ids = snapshot_child_ids(result)

@@ -3271,6 +3271,37 @@ export interface Config {
 
 Source: [`packages/web/web-fetch-http/src/index.ts:32`](../packages/web/web-fetch-http/src/index.ts)
 
+<a id="deepseek-aidsh-web-search-codex"></a>
+
+## `@deepseek-ai/dsh-web-search-codex`
+
+Requires: `web` · `subprocess`
+
+```ts config-catalog
+/** Deployment-owned local Codex process settings. */
+export interface Config {
+  /**
+   * Explicit child-environment allowlist; defaults to `{}`. `CODEX_HOME`
+   * selects the source `auth.json` without entering the child;
+   * `OPENAI_BASE_URL`, `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and
+   * `NO_PROXY` are forwarded. The provider removes every ambient entry and
+   * supplies private child paths.
+   */
+  readonly env?: Record<string, string>
+  /** Native Codex model used for hosted Web search; defaults to `gpt-5.5`. */
+  readonly model?: string
+  /** Whole-app-server process-tree termination grace; defaults to 3000 milliseconds. */
+  readonly disposeGraceMs?: number
+  /** Hosted-Web-search freshness mode; defaults to `live`. */
+  readonly searchMode?: CodexSearchMode
+}
+
+/** Codex hosted-Web-search freshness modes supported by app-server. */
+export type CodexSearchMode = 'cached' | 'indexed' | 'live'
+```
+
+Source: [`packages/web/web-search-codex/src/index.ts:44`](../packages/web/web-search-codex/src/index.ts)
+
 <a id="deepseek-aidsh-web-search-deepseek"></a>
 
 ## `@deepseek-ai/dsh-web-search-deepseek`

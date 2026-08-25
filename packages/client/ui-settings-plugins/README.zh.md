@@ -25,7 +25,7 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-打开设置中的「插件」分区并选择**插件配置**标签页，即可编辑本部署所组装的宿主平面插件。卡片依次为 shell 执行器（`bash`）、agent 循环的工具调用并行度（`agent-loop`）、subagent 模型选择（`subagent-model-selection`）以及 DeepSeek 搜索提供方（`web-search-deepseek`）。
+打开设置中的「插件」分区并选择**插件配置**标签页，即可编辑本部署所组装的宿主平面插件。本包按以下顺序注册卡片：shell 执行器（`bash`）、agent 循环的工具调用并行度（`agent-loop`）、subagent 模型选择（`subagent-model-selection`）以及可选 DeepSeek 搜索提供方（`web-search-deepseek`）；标签页只渲染 live Host 所服务 settings 命名空间对应的卡片。已交付的 Codex 搜索 base 不服务 `web-search-deepseek`，因此只有覆盖层挂载 DeepSeek 提供方时才会出现该卡片。
 
 ### 这里会出现什么
 

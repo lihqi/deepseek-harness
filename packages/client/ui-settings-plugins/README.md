@@ -25,7 +25,7 @@ English | [中文](README.zh.md)
 <a id="use-this-package"></a>
 ## Use this package
 
-Open the Plugins section in Settings and select the **Plugin configuration** tab to edit the host-plane plugins this deployment composes. The cards appear in this order: the shell executor (`bash`), the agent loop's tool-call parallelism (`agent-loop`), subagent model selection (`subagent-model-selection`), and the DeepSeek search provider (`web-search-deepseek`).
+Open the Plugins section in Settings and select the **Plugin configuration** tab to edit the host-plane plugins this deployment composes. This package registers cards in this order: the shell executor (`bash`), the agent loop's tool-call parallelism (`agent-loop`), subagent model selection (`subagent-model-selection`), and the optional DeepSeek search provider (`web-search-deepseek`); the tab renders only cards whose settings namespaces the live Host serves. The shipped Codex-search base does not serve `web-search-deepseek`, so that card is absent unless an overlay mounts the DeepSeek provider.
 
 ### What appears here
 

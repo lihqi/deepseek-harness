@@ -191,8 +191,13 @@ function expectedProcessExitDiagnostic(outcome: SubprocessOutcome): string {
 }
 
 interface JsonSchemaNode {
+  readonly additionalProperties?: boolean
+  readonly anyOf?: JsonSchemaNode[]
+  readonly items?: boolean | JsonSchemaNode
+  readonly oneOf?: JsonSchemaNode[]
   readonly properties?: Record<string, JsonSchemaNode>
   readonly required?: string[]
+  readonly title?: string
   readonly type?: string | string[]
 }
 
@@ -239,12 +244,47 @@ describe('real @openai/codex 0.149.1 product', () => {
     )) as {
       definitions: {
         ThreadStartParams: JsonSchemaNode
+        TurnStartParams: JsonSchemaNode
       }
     }
-    expect(schema.definitions.ThreadStartParams.properties?.model).toEqual({
+    const threadStartSchema = schema.definitions.ThreadStartParams
+    expect(threadStartSchema.properties?.model).toEqual({
       type: ['string', 'null'],
     })
-    expect(schema.definitions.ThreadStartParams.required).toBeUndefined()
+    expect(threadStartSchema.properties?.config).toEqual({
+      additionalProperties: true,
+      type: ['object', 'null'],
+    })
+    expect(threadStartSchema.properties?.developerInstructions).toEqual({
+      type: ['string', 'null'],
+    })
+    expect(threadStartSchema.properties).toHaveProperty('approvalPolicy')
+    expect(threadStartSchema.properties).toHaveProperty('sandbox')
+    expect(threadStartSchema.required).toBeUndefined()
+
+    const turnStartSchema = schema.definitions.TurnStartParams
+    expect(turnStartSchema.properties).toHaveProperty('outputSchema')
+    expect(turnStartSchema.properties).toHaveProperty('approvalPolicy')
+    expect(turnStartSchema.properties).toHaveProperty('sandboxPolicy')
+    expect(turnStartSchema.required).toEqual(['input', 'threadId'])
+
+    const notificationSchema = JSON.parse(readFileSync(
+      join(schemaRoot, 'ServerNotification.json'),
+      'utf8',
+    )) as {
+      definitions: {
+        ThreadItem: JsonSchemaNode
+      }
+    }
+    const webSearchItemSchema = notificationSchema.definitions.ThreadItem.oneOf
+      ?.find(node => node.title === 'WebSearchThreadItem')
+    expect(webSearchItemSchema?.required).toEqual(['id', 'query', 'type'])
+    expect(webSearchItemSchema?.properties?.query).toEqual({ type: 'string' })
+    expect(webSearchItemSchema?.properties?.action?.anyOf).toBeDefined()
+    expect(webSearchItemSchema?.properties?.results).toMatchObject({
+      items: true,
+      type: ['array', 'null'],
+    })
 
     const run = await harness.ctx.subagents.start('codex', {
       prompt: [{ type: 'text', text: task }],

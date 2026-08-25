@@ -29,6 +29,48 @@ export interface CodexWireFailureFacts {
   readonly httpStatus?: number | undefined
 }
 
+/** Optional config and narrower permission fields for one ephemeral Codex thread. */
+export interface CodexThreadOptions {
+  /** Session-scoped Codex config overrides. */
+  readonly config?: Readonly<Record<string, unknown>>
+  /** Additional developer instructions for this private thread. */
+  readonly developerInstructions?: string
+  /** Unattended approval request; the constructor permission mode remains authoritative. */
+  readonly approvalPolicy?: 'never'
+  /** Read-only sandbox request; the constructor permission mode remains authoritative. */
+  readonly sandbox?: 'read-only'
+  /** Explicitly disable every execution environment for this thread. */
+  readonly environments?: readonly []
+  /** Reject instruction files loaded by the product for this private thread. */
+  readonly requireNoInstructionSources?: true
+}
+
+/** Optional capabilities declared during the app-server handshake. */
+export interface CodexInitializeOptions {
+  /** Opt into app-server fields marked experimental by Codex 0.149.1. */
+  readonly experimentalApi?: true
+}
+
+/** Optional controls for the single turn owned by this wire. */
+export interface CodexTurnOptions {
+  /** JSON Schema constraining the final agent message. */
+  readonly outputSchema?: unknown
+  /** Unattended approval policy; integrations use `never`. */
+  readonly approvalPolicy?: 'never'
+  /** Exact app-server sandbox policy for the turn. */
+  readonly sandboxPolicy?: {
+    readonly type: 'readOnly'
+    readonly networkAccess: false
+  }
+}
+
+/** One authoritative completed hosted-Web-search item observed in the turn. */
+export interface CodexWebSearchItem {
+  readonly query: string
+  readonly action?: Readonly<Record<string, unknown>>
+  readonly results?: readonly unknown[]
+}
+
 const THREAD_PERMISSION_PARAMS: Readonly<Record<CodexPermissionMode, JsonObject>> = {
   never: { approvalPolicy: 'never' },
   'approve-for-me': {
@@ -206,6 +248,7 @@ export class CodexAppServerWire {
   }> = []
   private lastFinalAnswer: string | undefined
   private lastUnphasedAnswer: string | undefined
+  private readonly webSearches: CodexWebSearchItem[] = []
   private diagnostic: string | undefined
   private failure: CodexWireFailureFacts | undefined
   private diagnosticOrder = 0
@@ -263,8 +306,12 @@ export class CodexAppServerWire {
   /**
    * Perform the required app-server initialize/initialized handshake.
    * @param signal - unpublished-start cancellation.
+   * @param options - optional initialization capabilities for this client.
    */
-  async initialize(signal: AbortSignal): Promise<void> {
+  async initialize(
+    signal: AbortSignal,
+    options: CodexInitializeOptions = {},
+  ): Promise<void> {
     object(await this.guarded(this.transport.request('initialize', {
       clientInfo: {
         name: 'deepseek-harness',
@@ -272,7 +319,7 @@ export class CodexAppServerWire {
         version: '0.0.1',
       },
       capabilities: {
-        experimentalApi: false,
+        experimentalApi: options.experimentalApi === true,
         requestAttestation: false,
       },
     }, signal), signal), 'initialize response')
@@ -281,21 +328,163 @@ export class CodexAppServerWire {
   }
 
   /**
-   * Create the run's private ephemeral thread and retain its identity.
-   * @param cwd - parent Session workspace.
+   * Check whether any global MCP server is configured before publishing a query.
    * @param signal - unpublished-start cancellation.
+   * @returns `true` when Codex reports at least one configured MCP server.
    */
-  async startThread(cwd: string, signal: AbortSignal): Promise<void> {
+  async hasMcpServers(signal: AbortSignal): Promise<boolean> {
+    const response = object(await this.guarded(this.transport.request('mcpServerStatus/list', {
+      limit: 1,
+      detail: 'toolsAndAuthOnly',
+    }, signal), signal), 'mcpServerStatus/list response')
+    if (!Array.isArray(response.data)) {
+      throw new Error('subagent-codex: app-server returned invalid mcpServerStatus/list data')
+    }
+    if (
+      response.nextCursor !== undefined
+      && response.nextCursor !== null
+      && typeof response.nextCursor !== 'string'
+    ) {
+      throw new Error('subagent-codex: app-server returned invalid mcpServerStatus/list cursor')
+    }
+    return response.data.length > 0 || typeof response.nextCursor === 'string'
+  }
+
+  /**
+   * Check whether managed requirements can override private search settings.
+   * @param signal - unpublished-start cancellation.
+   * @returns `true` when Codex reports any managed requirements.
+   */
+  async hasConfigRequirements(signal: AbortSignal): Promise<boolean> {
+    const response = object(await this.guarded(this.transport.request(
+      'configRequirements/read',
+      undefined,
+      signal,
+    ), signal), 'configRequirements/read response')
+    if (response.requirements === null) return false
+    if (
+      response.requirements === undefined
+      || typeof response.requirements !== 'object'
+      || Array.isArray(response.requirements)
+    ) {
+      throw new Error('subagent-codex: app-server returned invalid config requirements')
+    }
+    return true
+  }
+
+  /**
+   * Check whether the isolated workspace exposes any skill or skill-load error.
+   * @param cwd - isolated working directory scanned by Codex.
+   * @param signal - unpublished-start cancellation.
+   * @returns `true` when Codex reports a skill or load error.
+   */
+  async hasSkills(cwd: string, signal: AbortSignal): Promise<boolean> {
+    const response = object(await this.guarded(this.transport.request('skills/list', {
+      cwds: [cwd],
+      forceReload: true,
+    }, signal), signal), 'skills/list response')
+    if (!Array.isArray(response.data) || response.data.length !== 1) {
+      throw new Error('subagent-codex: app-server returned invalid skills/list data')
+    }
+    const entry = object(response.data[0], 'skills/list entry')
+    if (!Array.isArray(entry.skills) || !Array.isArray(entry.errors)) {
+      throw new Error('subagent-codex: app-server returned invalid skills/list entry')
+    }
+    return entry.skills.length > 0 || entry.errors.length > 0
+  }
+
+  /**
+   * Check whether config outside the pinned package, empty system/user
+   * sentinels, or one command-line session layer can affect an unpublished
+   * search thread.
+   * @param cwd - isolated working directory used to resolve project layers.
+   * @param userConfigPath - sole private user config path accepted by the caller.
+   * @param signal - unpublished-start cancellation.
+   * @returns `true` when Codex reports a nonempty external, duplicate session,
+   * managed, project, or unknown layer.
+   */
+  async hasUnsafeConfigLayers(
+    cwd: string,
+    userConfigPath: string,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const response = object(await this.guarded(this.transport.request('config/read', {
+      includeLayers: true,
+      cwd,
+    }, signal), signal), 'config/read response')
+    if (!Array.isArray(response.layers)) {
+      throw new Error('subagent-codex: app-server omitted config/read layers')
+    }
+    let sessionFlagsSeen = false
+    for (const [index, value] of response.layers.entries()) {
+      const layer = object(value, `config/read layers[${String(index)}]`)
+      const name = object(layer.name, `config/read layers[${String(index)}] name`)
+      const config = object(layer.config, `config/read layers[${String(index)}] config`)
+      if (
+        layer.disabledReason !== undefined
+        && layer.disabledReason !== null
+        && typeof layer.disabledReason !== 'string'
+      ) {
+        throw new Error(
+          `subagent-codex: app-server returned invalid config/read layers[${String(index)}] disabled reason`,
+        )
+      }
+      if (name.type === 'packagedDefaults') continue
+      if (name.type === 'sessionFlags') {
+        if (sessionFlagsSeen || Object.keys(config).length === 0) return true
+        sessionFlagsSeen = true
+        continue
+      }
+      if (
+        name.type === 'user'
+        && name.file === userConfigPath
+        && (name.profile === undefined || name.profile === null)
+        && Object.keys(config).length === 0
+      ) continue
+      if (name.type === 'system' && Object.keys(config).length === 0) continue
+      return true
+    }
+    return !sessionFlagsSeen
+  }
+
+  /**
+   * Create the run's private ephemeral thread and retain its identity.
+   * @param cwd - working directory for the private thread.
+   * @param signal - unpublished-start cancellation.
+   * @param options - optional config and permission-narrowing integration fields.
+   */
+  async startThread(
+    cwd: string,
+    signal: AbortSignal,
+    options: CodexThreadOptions = {},
+  ): Promise<void> {
     const response = object(await this.guarded(this.transport.request('thread/start', {
       cwd,
       ephemeral: true,
       ...this.model === undefined ? {} : { model: this.model },
+      ...options.config !== undefined ? { config: options.config } : {},
+      ...options.developerInstructions !== undefined
+        ? { developerInstructions: options.developerInstructions }
+        : {},
+      ...options.approvalPolicy !== undefined
+        ? { approvalPolicy: options.approvalPolicy }
+        : {},
+      ...options.sandbox !== undefined ? { sandbox: options.sandbox } : {},
+      ...options.environments !== undefined ? { environments: options.environments } : {},
       ...THREAD_PERMISSION_PARAMS[this.permissionMode],
     }, signal), signal), 'thread/start response')
     const thread = object(response.thread, 'thread/start thread')
     const id = string(thread.id, 'thread/start thread id')
     if (thread.ephemeral !== true) {
       throw new Error('subagent-codex: app-server did not create an ephemeral thread')
+    }
+    if (options.requireNoInstructionSources === true) {
+      if (!Array.isArray(response.instructionSources)) {
+        throw new Error('subagent-codex: app-server omitted thread instruction sources')
+      }
+      if (response.instructionSources.length > 0) {
+        throw new Error('subagent-codex: app-server loaded thread instruction sources')
+      }
     }
     this.threadId = id
   }
@@ -305,11 +494,13 @@ export class CodexAppServerWire {
    * terminal notification.
    * @param texts - already validated task text blocks.
    * @param signal - local cancellation for the published run.
+   * @param options - optional output schema and unattended turn policy.
    * @returns the shared subagent result.
    */
   async runTurn(
     texts: readonly string[],
     signal: AbortSignal,
+    options: CodexTurnOptions = {},
   ): Promise<SubagentResult> {
     const completion = Promise.withResolvers<{
       readonly params: JsonObject
@@ -321,6 +512,13 @@ export class CodexAppServerWire {
       const response = object(await this.guarded(this.transport.request('turn/start', {
         threadId,
         input: texts.map(text => ({ type: 'text', text, text_elements: [] })),
+        ...options.outputSchema !== undefined ? { outputSchema: options.outputSchema } : {},
+        ...options.approvalPolicy !== undefined
+          ? { approvalPolicy: options.approvalPolicy }
+          : {},
+        ...options.sandboxPolicy !== undefined
+          ? { sandboxPolicy: options.sandboxPolicy }
+          : {},
       }, signal), signal), 'turn/start response')
       const turn = object(response.turn, 'turn/start turn')
       this.commitTurnId(string(turn.id, 'turn/start turn id'))
@@ -411,6 +609,14 @@ export class CodexAppServerWire {
    */
   collectFailure(): CodexWireFailureFacts {
     return this.failure as CodexWireFailureFacts
+  }
+
+  /**
+   * Completed hosted-Web-search items observed for the active turn.
+   * @returns a detached snapshot in observation order.
+   */
+  collectWebSearches(): readonly CodexWebSearchItem[] {
+    return structuredClone(this.webSearches)
   }
 
   /** Detach JSON-RPC listeners and reject outstanding requests. Idempotent. */
@@ -661,6 +867,25 @@ export class CodexAppServerWire {
       if (id !== this.turnId) return
       const item = object(params.item, 'item/completed item')
       if (this.recordDeclinedItem(item, order)) return
+      if (item.type === 'webSearch') {
+        const query = typeof item.query === 'string'
+          ? item.query
+          : (() => { throw new Error('subagent-codex: app-server returned invalid webSearch query') })()
+        const action = item.action === null || item.action === undefined
+          ? undefined
+          : object(item.action, 'webSearch action')
+        const results = item.results === null || item.results === undefined
+          ? undefined
+          : Array.isArray(item.results)
+            ? item.results
+            : (() => { throw new Error('subagent-codex: app-server returned invalid webSearch results') })()
+        this.webSearches.push({
+          query,
+          ...action !== undefined ? { action } : {},
+          ...results !== undefined ? { results } : {},
+        })
+        return
+      }
       if (item.type !== 'agentMessage') return
       const text = typeof item.text === 'string'
         ? item.text

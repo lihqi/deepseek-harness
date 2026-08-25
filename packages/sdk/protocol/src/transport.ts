@@ -35,11 +35,12 @@ export interface JsonRpcTransportPeer {
   /**
    * Send a request and await its response.
    * @param method - the JSON-RPC method name.
-   * @param params - the request parameters object.
+   * @param params - the optional request parameters object; omission removes
+   * the `params` member for parameterless protocol methods.
    * @returns the result; rejects with {@link JsonRpcResponseError} on an error
    * response, and with a plain `Error` on a write failure or closure.
    */
-  request(method: string, params: object): Promise<unknown>
+  request(method: string, params?: object): Promise<unknown>
   /**
    * Send a notification; omitted params produce no `params` member.
    * @param method - the JSON-RPC method name.
@@ -112,15 +113,18 @@ export class JsonRpcLineTransport implements JsonRpcTransportPeer {
   /**
    * Send a request and await its response.
    * @param method - the JSON-RPC method name.
-   * @param params - the request parameters object.
+   * @param params - the optional request parameters object; omission removes
+   * the `params` member for parameterless protocol methods.
    * @param signal - optional abandonment signal: aborting removes the pending
    * entry (no state is retained for a response that may never come) and
    * rejects with the signal's reason.
    * @returns the result; rejects per {@link JsonRpcTransportPeer.request}.
    */
-  request(method: string, params: object, signal?: AbortSignal): Promise<unknown> {
+  request(method: string, params?: object, signal?: AbortSignal): Promise<unknown> {
     const id = `req_${randomUUID().replaceAll('-', '')}`
-    const message = { jsonrpc: '2.0', id, method, params }
+    const message = params === undefined
+      ? { jsonrpc: '2.0', id, method }
+      : { jsonrpc: '2.0', id, method, params }
     return new Promise((resolve, reject) => {
       let detach = (): void => {}
       if (signal !== undefined) {

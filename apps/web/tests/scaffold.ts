@@ -216,6 +216,8 @@ export interface WebScaffold {
   persistenceRoot: string
   /** Isolated harness home the settings/credentials rows write ($DSH_HOME double). */
   harnessHome: string
+  /** Isolated source Codex home whose test-only auth.json enables local search. */
+  codexAuthHome: string
   /** Send a browser-equivalent Host request with this scaffold's authenticated cookie. */
   hostFetch(path: string, init?: RequestInit): Promise<Response>
   /** Await a settled turn end: in-process turn/end, then the agent's idle flip (which follows the persistence flush). */
@@ -305,17 +307,6 @@ export interface LaunchOptions {
   /** Leave the current welcome notice pending; ordinary scenarios pre-acknowledge it before browser boot. */
   welcomeNoticePending?: boolean
   /**
-   * Patch the shipped DeepSeek search row to a deterministic endpoint and
-   * credential reference. Browser search scenarios keep the real provider and
-   * credentials seam while avoiding external search traffic and ambient keys.
-   */
-  deepSeekSearch?: {
-    /** Anthropic-compatible base URL; the provider appends `/messages`. */
-    baseURL: string
-    /** Credential reference resolved by the shipped search provider. */
-    apiKeyEnv: string
-  }
-  /**
    * Replace the roster row the scaffold pins by default (no configured roots,
    * default `standard` — the plugin's own shipped presets). Supply this only
    * to change WHICH presets a scenario sees beyond the shipped set — a
@@ -393,6 +384,7 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
   // paths at load, and an in-process boot must NEVER touch the developer's
   // real ~/.dsh document or credential file.
   const harnessHome = options.harnessHome ?? join(workspaceCwd, '.dsh-home')
+  const codexAuthHome = join(workspaceCwd, '.codex-auth-home')
   // Skill discovery is model-visible input, and its roots now resolve inside a
   // PRESET — a subtree this lane's include patches cannot reach, because the
   // roster mounts it directly per session rather than as a row of the booted
@@ -423,6 +415,8 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
   Object.assign(process.env, skillRootEnvironment)
   let persistenceRoot: string
   try {
+    await mkdir(codexAuthHome, { mode: 0o700 })
+    await writeFile(join(codexAuthHome, 'auth.json'), '{}\n', { mode: 0o600 })
     persistenceRoot = await mkdtemp(join(tmpdir(), 'dsh-web-e2e-sessions-'))
   } catch (error) {
     const failures: unknown[] = [error]
@@ -443,6 +437,12 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
     ? []
     : loadOverlayPatches('web e2e scaffold', options.extraOverlayPath)
   const composedRows = composeEntries([basePatches, surfacePatches, extraOverlayPatches])
+  const codexSearchConfig = composedRows.find(row => row.id === 'web-search-codex')?.config as {
+    env?: Record<string, string>
+    disposeGraceMs?: number
+    searchMode?: 'cached' | 'indexed' | 'live'
+  } | undefined
+  const resolvedCodexSearchConfig = codexSearchConfig ?? {}
   const webRuntimeConfig = composedRows.find(row => row.id === 'web-runtime')?.config as {
     surfaceContext?: boolean
   } | undefined
@@ -472,6 +472,13 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
     // to an absolute temp root (removed with the workspace at close) so tests
     // never write the user's harness home.
     { id: 'storage-json', config: { root: join(workspaceCwd, '.dsh-storages') } },
+    {
+      id: 'web-search-codex',
+      config: {
+        ...resolvedCodexSearchConfig,
+        env: { ...resolvedCodexSearchConfig.env, CODEX_HOME: codexAuthHome },
+      },
+    },
     // Skill discovery is model-visible input. Pin every host-level root inside
     // the owned temp world so ~/.dsh, ~/.agents, and a bundled-root env setting
     // cannot change replay requests or conversation goldens. Project roots stay
@@ -548,15 +555,6 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
         { id: 'tool-cordis', name: '@deepseek-ai/dsh-tool-cordis' },
       ] }]
       : [],
-    ...options.deepSeekSearch === undefined
-      ? []
-      : [{
-        id: 'web-search-deepseek',
-        config: {
-          apiKeyEnv: options.deepSeekSearch.apiKeyEnv,
-          baseURL: options.deepSeekSearch.baseURL,
-        },
-      }],
     ...mode === 'record' || options.deepSeekMissingCredential === true
       ? []
       : [{ id: 'llm-deepseek', disabled: true }],
@@ -576,6 +574,9 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
   let cookieHeader = ''
   let replayHandle: ReplayHandle | undefined
   try {
+    if (codexSearchConfig === undefined) {
+      throw new Error('web e2e scaffold: shipped Web composition has no Codex search row')
+    }
     process.chdir(workspaceCwd)
     const profileDir = join(harnessHome, 'profiles', 'scaffold')
     const extraLayers: Profile['layers'] = await Promise.all((options.extraInstallAnchors ?? []).map(async (anchor) => {
@@ -728,6 +729,7 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
 
   return {
     harnessHome,
+    codexAuthHome,
     mode,
     baseUrl,
     authenticatedUrl,

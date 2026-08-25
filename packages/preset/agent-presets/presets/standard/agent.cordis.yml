@@ -4,9 +4,10 @@
 # standing scope; every session naming it joins by scope parentage, so the
 # tools and prompt sections registered here cover each joined agent while a
 # session's own state stays keyed per Session/Agent inside the plugins. The
-# host composition (`base.cordis.yml` + `web.cordis.yml`) keeps everything a
-# preset must not own: the registries themselves, the sandbox and approval
-# stack, persistence, and the model route.
+# host composition (`packages/bundle/base/cordis.patch.yml` plus the selected
+# application layer, such as `packages/bundle/web-app/cordis.patch.yml`) keeps
+# everything a preset must not own: the registries themselves, the sandbox and
+# approval stack, persistence, and the model route.
 #
 # A service row here MUST sit inside a group carrying an `isolate` realm.
 # Without one it publishes into the root realm, where it is process-global —
@@ -254,4 +255,4 @@
   name: '@deepseek-ai/dsh-tool-web'
   config:
     fetch: true
-    searchTimeoutMs: 60000
+    searchTimeoutMs: 120000

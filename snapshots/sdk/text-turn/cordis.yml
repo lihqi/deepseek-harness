@@ -32,3 +32,7 @@
   name: '@deepseek-ai/dsh-session-log-deepseek'
   config:
     enabled: true
+
+- insert:
+    - id: codex-search-sdk-event
+      name: '../../../scripts/fixtures/codex-search-sdk-event.mjs'

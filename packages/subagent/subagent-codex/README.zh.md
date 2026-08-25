@@ -95,6 +95,8 @@ dsh --profile <name>
 
 本节解释提供方如何驱动真实 Codex app-server，以及可观察行为从何而来；完整约定见[使用本包](#use-this-package)。
 
+本包的 `./app-server` 子路径是供本地 Codex 集成共用的有限接口。它导出固定 argv、进程释放、实验性初始化选项、有效配置与 requirement 读取、skill 与 MCP server 状态读取、显式空环境与空 instruction source 检查、带可选策略字段的单个临时线程／turn 协议层、最终文本选择，以及权威的已完成 `webSearch` 观察结果；它不导出通用 JSON-RPC 请求方法。[`dsh-web-search-codex`](../../web/web-search-codex/README.zh.md) 使用该接口，因此两个集成共用握手、审批拒绝、通知关联、取消与完整进程树退出行为。
+
 ### 设计理念
 
 - **每次运行一个全新进程、线程与轮次。** 每次运行都会 spawn 全新 app-server、创建一个临时线程并恰好执行一个轮次；没有续接、恢复或池化。
@@ -108,6 +110,7 @@ dsh --profile <name>
 | [`src/index.ts`](src/index.ts) | 插件入口：config schema、提供方注册 |
 | [`src/run.ts`](src/run.ts) | 运行生命周期、轮次执行、结果选择与诊断 |
 | [`src/wire.ts`](src/wire.ts) | 最小的 app-server JSON-RPC 协议实现 |
+| [`src/app-server.ts`](src/app-server.ts) | 与其他本地 Codex 集成共用的有限 `./app-server` 导出 |
 | [`cordis.patch.yml`](cordis.patch.yml) | 注册休眠提供方的 Profile patch 层 |
 
 ### 运行流程

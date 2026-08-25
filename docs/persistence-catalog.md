@@ -1042,6 +1042,17 @@ Source: [`packages/core/session/src/types.ts:249`](../packages/core/session/src/
 
 ### `web/*`
 
+<a id="webcodex-search-llm-request--log-only"></a>
+
+#### `web/codex-search-llm-request` — log-only
+
+```ts persistence-catalog
+/** Credential-free intended local Codex search request recorded before dispatch. */
+'web/codex-search-llm-request': CodexSearchLlmRequest
+```
+
+Source: [`packages/web/web-search-codex/src/provider.ts:54`](../packages/web/web-search-codex/src/provider.ts)
+
 <a id="webdeepseek-search-llm-request--log-only"></a>
 
 #### `web/deepseek-search-llm-request` — log-only

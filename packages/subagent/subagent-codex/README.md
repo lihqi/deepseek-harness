@@ -95,6 +95,8 @@ An install that omits optional dependencies, uses an unsupported platform, or lo
 
 This section explains how the provider drives a real Codex app-server and where the observable behavior comes from; the full contract lives in [Use this package](#use-this-package).
 
+The package's `./app-server` subpath is a bounded shared surface for local Codex integrations. It exposes the fixed argv, process disposal, experimental initialization options, effective configuration and requirement reads, skill and MCP-server status reads, explicit empty-environment and empty-instruction-source checks, one ephemeral thread/turn wire with optional policy fields, final text selection, and authoritative completed `webSearch` observations; it exposes no generic JSON-RPC request method. [`dsh-web-search-codex`](../../web/web-search-codex/README.md) consumes this surface so both integrations use the same handshake, approval denial, notification association, cancellation, and complete process-tree exit behavior.
+
 ### Design concept
 
 - **One fresh process, thread, and turn per run.** Every run spawns a fresh app-server, creates one ephemeral thread, and executes exactly one turn; there is no continuation, resume, or pooling.
@@ -108,6 +110,7 @@ This section explains how the provider drives a real Codex app-server and where 
 | [`src/index.ts`](src/index.ts) | Plugin entry: config schema, provider registration |
 | [`src/run.ts`](src/run.ts) | The run lifecycle, turn execution, result selection, and diagnostics |
 | [`src/wire.ts`](src/wire.ts) | The minimal app-server JSON-RPC wire implementation |
+| [`src/app-server.ts`](src/app-server.ts) | Bounded `./app-server` exports shared with other local Codex integrations |
 | [`cordis.patch.yml`](cordis.patch.yml) | The Profile patch layer that registers the dormant provider |
 
 ### Run flow

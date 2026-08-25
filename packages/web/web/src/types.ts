@@ -27,7 +27,7 @@ export interface WebSearchRequest {
 
 /**
  * Normalized search outcome. `content` is optional provider-generated answer
- * text or summary (Exa and DeepSeek return none; Perplexity returns a
+ * text or summary (Exa and DeepSeek return none; Perplexity and Codex return a
  * generated answer).
  * `sources[]` is the portable citation shape. `truncated` is set by the seam
  * when it cut `sources[]` down to `maxResults`.

@@ -41,12 +41,22 @@ describe('dsh-base bundle', () => {
     })
     expect(rows.filter(row => row.id === 'subagent-codex')).toHaveLength(0)
     expect(rows.filter(row => row.id === 'subagent-claude-code')).toHaveLength(0)
-    expect(rows.find(row => row.id === 'web')?.config).toMatchObject({ fetchProvider: 'http' })
+    expect(rows.find(row => row.id === 'web')?.config).toMatchObject({
+      fetchProvider: 'http',
+      searchProvider: 'codex-local',
+    })
     expect(rows.find(row => row.id === 'web-fetch-http')).toBeDefined()
-    expect(rows.find(row => row.id === 'tool-web')?.config).toMatchObject({ fetch: false })
-    expect(manifest.dependencies).not.toHaveProperty('@deepseek-ai/dsh-subagent-codex')
+    expect(rows.find(row => row.id === 'web-search-codex')).toBeDefined()
+    expect(rows.find(row => row.id === 'tool-web')?.config).toMatchObject({
+      fetch: false,
+      searchTimeoutMs: 120000,
+    })
+    // The Codex subagent plugin stays unmounted; its public app-server adapter
+    // is a runtime dependency of the default Codex Web-search provider.
+    expect(manifest.dependencies).toHaveProperty('@deepseek-ai/dsh-subagent-codex')
     expect(manifest.dependencies).not.toHaveProperty('@deepseek-ai/dsh-subagent-claude-code')
     expect(manifest.dependencies).toHaveProperty('@deepseek-ai/dsh-web-fetch-http')
+    expect(manifest.dependencies).toHaveProperty('@deepseek-ai/dsh-web-search-codex')
   })
 
   it('gates each shell stack by platform with a symmetric disabled expression', () => {

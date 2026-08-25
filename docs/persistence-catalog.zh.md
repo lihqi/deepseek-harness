@@ -1044,6 +1044,17 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 ### `web/*`
 
+<a id="webcodex-search-llm-request--log-only"></a>
+
+#### `web/codex-search-llm-request` — log-only
+
+```ts persistence-catalog
+/** Credential-free intended local Codex search request recorded before dispatch. */
+'web/codex-search-llm-request': CodexSearchLlmRequest
+```
+
+来源：[`packages/web/web-search-codex/src/provider.ts:54`](../packages/web/web-search-codex/src/provider.ts)
+
 <a id="webdeepseek-search-llm-request--log-only"></a>
 
 #### `web/deepseek-search-llm-request` — log-only

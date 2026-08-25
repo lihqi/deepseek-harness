@@ -41,6 +41,20 @@ describe('JsonRpcLineTransport', () => {
     b.close()
   })
 
+  it('omits params from a parameterless request', async () => {
+    const { aToB, bToA, b } = transportPair()
+    b.start()
+
+    const pending = b.request('parameterless')
+    const requestChunk = (await once(bToA, 'data'))[0] as Buffer | string
+    const request = JSON.parse(String(requestChunk)) as { id: string }
+    expect(request).not.toHaveProperty('params')
+    aToB.write(`${JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { ok: true } })}\n`)
+
+    await expect(pending).resolves.toEqual({ ok: true })
+    b.close()
+  })
+
   it('reports JSON-RPC request errors from the remote peer with their wire code', async () => {
     const { a, b } = transportPair()
     a.onRequest(async () => {

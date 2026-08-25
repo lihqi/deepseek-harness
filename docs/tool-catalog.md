@@ -2254,7 +2254,7 @@ Source: [`packages/web/tool-web/src/index.ts`](../packages/web/tool-web/src/inde
 
 ### `web_search`
 
-Search the web for current information. Provide 1–4 queries in the required queries array. Returns an optional summary answer and a list of source URLs.
+Search the web for current information. Provide 1–4 queries in the required queries array. Provider state is checked on every call; a repeated request after an earlier failure must retry before claiming search is unavailable. Returns an optional summary answer and a list of source URLs.
 
 ```json
 {

@@ -311,6 +311,31 @@ function agentMessage(
   }
 }
 
+function webSearch(
+  query: unknown,
+  fields: {
+    readonly action?: unknown
+    readonly results?: unknown
+    readonly turnId?: string
+    readonly threadId?: string
+  } = {},
+): JsonObject {
+  return {
+    method: 'item/completed',
+    params: {
+      threadId: fields.threadId ?? 'thread-1',
+      turnId: fields.turnId ?? 'turn-1',
+      item: {
+        id: 'search-1',
+        type: 'webSearch',
+        query,
+        ...Object.hasOwn(fields, 'action') ? { action: fields.action } : {},
+        ...Object.hasOwn(fields, 'results') ? { results: fields.results } : {},
+      },
+    },
+  }
+}
+
 function turnCompleted(
   status: unknown,
   turnId = 'turn-1',
@@ -734,6 +759,208 @@ describe('task admission and package contracts', () => {
 })
 
 describe('CodexAppServerWire', () => {
+  it('opts into experimental environment isolation only when requested', async () => {
+    const child = fakeChild()
+    const wire = defaultWire(child)
+    wire.start()
+    const initializing = wire.initialize(
+      new AbortController().signal,
+      { experimentalApi: true },
+    )
+    const initialize = await child.peer.nextMethod('initialize')
+    expect(initialize.params).toMatchObject({
+      capabilities: { experimentalApi: true },
+    })
+    child.peer.respond(initialize, { userAgent: 'codex-cli 0.149.1' })
+    await initializing
+    await child.peer.nextMethod('initialized')
+
+    const starting = wire.startThread('/isolated', new AbortController().signal, {
+      environments: [],
+      requireNoInstructionSources: true,
+    })
+    const threadStart = await child.peer.nextMethod('thread/start')
+    expect(threadStart.params).toMatchObject({ cwd: '/isolated', environments: [] })
+    child.peer.respond(threadStart, {
+      thread: { id: 'thread-1', ephemeral: true },
+      instructionSources: [],
+    })
+    await starting
+    wire.close()
+  })
+
+  it.each([
+    [{ data: [], nextCursor: null }, false],
+    [{ data: [{ name: 'configured' }], nextCursor: null }, true],
+    [{ data: [], nextCursor: 'next-page' }, true],
+  ] as const)('checks the global MCP inventory before a thread', async (response, expected) => {
+    const child = fakeChild()
+    const wire = defaultWire(child)
+    wire.start()
+    const pending = wire.hasMcpServers(new AbortController().signal)
+    const requestFrame = await child.peer.nextMethod('mcpServerStatus/list')
+    expect(requestFrame.params).toEqual({ limit: 1, detail: 'toolsAndAuthOnly' })
+    child.peer.respond(requestFrame, response)
+    await expect(pending).resolves.toBe(expected)
+    wire.close()
+  })
+
+  it.each([
+    [{ data: null, nextCursor: null }, 'invalid mcpServerStatus/list data'],
+    [{ data: [], nextCursor: 1 }, 'invalid mcpServerStatus/list cursor'],
+  ] as const)('rejects malformed global MCP inventory responses', async (response, message) => {
+    const child = fakeChild()
+    const wire = defaultWire(child)
+    wire.start()
+    const pending = wire.hasMcpServers(new AbortController().signal)
+    const requestFrame = await child.peer.nextMethod('mcpServerStatus/list')
+    child.peer.respond(requestFrame, response)
+    await expect(pending).rejects.toThrow(message)
+    wire.close()
+  })
+
+  it.each([
+    [{ requirements: null }, false],
+    [{ requirements: { allowedWebSearchModes: ['cached'] } }, true],
+  ] as const)('checks managed config requirements before a thread', async (response, expected) => {
+    const child = fakeChild()
+    const wire = defaultWire(child)
+    wire.start()
+    const pending = wire.hasConfigRequirements(new AbortController().signal)
+    const requestFrame = await child.peer.nextMethod('configRequirements/read')
+    expect(requestFrame.params).toBeUndefined()
+    child.peer.respond(requestFrame, response)
+    await expect(pending).resolves.toBe(expected)
+    wire.close()
+  })
+
+  it.each([
+    [{}, 'invalid config requirements'],
+    [{ requirements: 'managed' }, 'invalid config requirements'],
+    [{ requirements: [] }, 'invalid config requirements'],
+  ] as const)('rejects malformed managed config requirements', async (response, message) => {
+    const child = fakeChild()
+    const wire = defaultWire(child)
+    wire.start()
+    const pending = wire.hasConfigRequirements(new AbortController().signal)
+    const requestFrame = await child.peer.nextMethod('configRequirements/read')
+    child.peer.respond(requestFrame, response)
+    await expect(pending).rejects.toThrow(message)
+    wire.close()
+  })
+
+  it.each([
+    [{ data: [{ cwd: '/private/workspace', skills: [], errors: [] }] }, false],
+    [{ data: [{ cwd: '/private/workspace', skills: [{ name: 'reader' }], errors: [] }] }, true],
+    [{ data: [{ cwd: '/private/workspace', skills: [], errors: [{ message: 'bad' }] }] }, true],
+  ] as const)('checks the isolated skill inventory before a thread', async (response, expected) => {
+    const child = fakeChild()
+    const wire = defaultWire(child)
+    wire.start()
+    const pending = wire.hasSkills('/private/workspace', new AbortController().signal)
+    const requestFrame = await child.peer.nextMethod('skills/list')
+    expect(requestFrame.params).toEqual({
+      cwds: ['/private/workspace'],
+      forceReload: true,
+    })
+    child.peer.respond(requestFrame, response)
+    await expect(pending).resolves.toBe(expected)
+    wire.close()
+  })
+
+  it.each([
+    [{ data: [] }, 'invalid skills/list data'],
+    [{ data: [{ cwd: '/private/workspace', skills: null, errors: [] }] }, 'invalid skills/list entry'],
+    [{ data: [{ cwd: '/private/workspace', skills: [], errors: null }] }, 'invalid skills/list entry'],
+  ] as const)('rejects malformed isolated skill inventories', async (response, message) => {
+    const child = fakeChild()
+    const wire = defaultWire(child)
+    wire.start()
+    const pending = wire.hasSkills('/private/workspace', new AbortController().signal)
+    const requestFrame = await child.peer.nextMethod('skills/list')
+    child.peer.respond(requestFrame, response)
+    await expect(pending).rejects.toThrow(message)
+    wire.close()
+  })
+
+  it.each([
+    [[], true],
+    [[
+      { name: { type: 'packagedDefaults' }, config: { fixed: true } },
+      { name: { type: 'user', file: '/private/config.toml', profile: null }, config: {} },
+      { name: { type: 'system' }, config: {}, disabledReason: null },
+      { name: { type: 'sessionFlags' }, config: { fixed: true } },
+    ], false],
+    [[{ name: { type: 'system' }, config: { hooks: ['external'] } }], true],
+    [[
+      { name: { type: 'system' }, config: {}, disabledReason: 'not configured' },
+      { name: { type: 'sessionFlags' }, config: { fixed: true } },
+    ], false],
+    [[{ name: { type: 'project' }, config: {}, disabledReason: 'untrusted' }], true],
+    [[{ name: { type: 'user', file: '/private/config.toml' }, config: { mcp_servers: {} } }], true],
+    [[{ name: { type: 'user', file: '/other/config.toml' }, config: {} }], true],
+    [[{ name: { type: 'sessionFlags' }, config: {} }], true],
+    [[
+      { name: { type: 'sessionFlags' }, config: { one: true } },
+      { name: { type: 'sessionFlags' }, config: { two: true } },
+    ], true],
+  ] as const)('checks effective config-layer provenance before a thread', async (layers, expected) => {
+    const child = fakeChild()
+    const wire = defaultWire(child)
+    wire.start()
+    const pending = wire.hasUnsafeConfigLayers(
+      '/private/workspace',
+      '/private/config.toml',
+      new AbortController().signal,
+    )
+    const requestFrame = await child.peer.nextMethod('config/read')
+    expect(requestFrame.params).toEqual({ includeLayers: true, cwd: '/private/workspace' })
+    child.peer.respond(requestFrame, { layers })
+    await expect(pending).resolves.toBe(expected)
+    wire.close()
+  })
+
+  it.each([
+    [{}, 'omitted config/read layers'],
+    [{ layers: [null] }, 'config/read layers[0]'],
+    [{ layers: [{}] }, 'config/read layers[0] name'],
+    [{ layers: [{ name: { type: 'system' } }] }, 'config/read layers[0] config'],
+    [{ layers: [{ name: { type: 'system' }, config: {}, disabledReason: 1 }] }, 'disabled reason'],
+  ] as const)('rejects malformed config-layer provenance', async (response, message) => {
+    const child = fakeChild()
+    const wire = defaultWire(child)
+    wire.start()
+    const pending = wire.hasUnsafeConfigLayers(
+      '/private/workspace',
+      '/private/config.toml',
+      new AbortController().signal,
+    )
+    const requestFrame = await child.peer.nextMethod('config/read')
+    child.peer.respond(requestFrame, response)
+    await expect(pending).rejects.toThrow(message)
+    wire.close()
+  })
+
+  it.each([
+    [{}, 'omitted thread instruction sources'],
+    [{ instructionSources: ['/workspace/AGENTS.md'] }, 'loaded thread instruction sources'],
+  ] as const)('rejects unsafe instruction-source response: %s', async (extra, message) => {
+    const child = fakeChild()
+    const wire = defaultWire(child)
+    wire.start()
+    const starting = wire.startThread('/isolated', new AbortController().signal, {
+      environments: [],
+      requireNoInstructionSources: true,
+    })
+    const threadStart = await child.peer.nextMethod('thread/start')
+    child.peer.respond(threadStart, {
+      thread: { id: 'thread-1', ephemeral: true },
+      ...extra,
+    })
+    await expect(starting).rejects.toThrow(message)
+    wire.close()
+  })
+
   it('sends the fixed handshake, thread, and turn payloads and keeps final_answer', async () => {
     const child = fakeChild()
     const wire = defaultWire(child)
@@ -808,6 +1035,171 @@ describe('CodexAppServerWire', () => {
     })
     expect(wire.collectOutput()).toEqual([{ type: 'text', text: 'last final' }])
     wire.close()
+    wire.close()
+  })
+
+  it('keeps constructor permissions authoritative over thread options', async () => {
+    const child = fakeChild()
+    const wire = new CodexAppServerWire(
+      child.handle.stdout!,
+      child.handle.stdin!,
+      'approve-for-me',
+      'codex-explicit-model',
+    )
+    wire.start()
+    const initializing = wire.initialize(new AbortController().signal)
+    const initialize = await child.peer.nextMethod('initialize')
+    child.peer.respond(initialize, { userAgent: 'codex-cli 0.149.1' })
+    await initializing
+    await child.peer.nextMethod('initialized')
+
+    const starting = wire.startThread(
+      '/workspace',
+      new AbortController().signal,
+      {
+        config: { web_search: 'live' },
+        developerInstructions: 'Use hosted Web search only.',
+        approvalPolicy: 'never',
+        sandbox: 'read-only',
+      },
+    )
+    const threadStart = await child.peer.nextMethod('thread/start')
+    expect(threadStart.params).toEqual({
+      cwd: '/workspace',
+      ephemeral: true,
+      model: 'codex-explicit-model',
+      config: { web_search: 'live' },
+      developerInstructions: 'Use hosted Web search only.',
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'auto_review',
+      sandbox: 'workspace-write',
+    })
+    child.peer.respond(threadStart, { thread: { id: 'thread-1', ephemeral: true } })
+    await starting
+    wire.close()
+  })
+
+  it('sends the bounded turn options unchanged', async () => {
+    const { child, wire } = await initializeWire()
+    const outputSchema = {
+      type: 'object',
+      properties: { content: { type: 'string' } },
+      required: ['content'],
+      additionalProperties: false,
+    }
+    const result = wire.runTurn(
+      ['task'],
+      new AbortController().signal,
+      {
+        outputSchema,
+        approvalPolicy: 'never',
+        sandboxPolicy: { type: 'readOnly', networkAccess: false },
+      },
+    )
+    const turnStart = await child.peer.nextMethod('turn/start')
+    expect(turnStart.params).toEqual({
+      threadId: 'thread-1',
+      input: [{ type: 'text', text: 'task', text_elements: [] }],
+      outputSchema,
+      approvalPolicy: 'never',
+      sandboxPolicy: { type: 'readOnly', networkAccess: false },
+    })
+    child.peer.respond(turnStart, { turn: { id: 'turn-1' } })
+    child.peer.send(
+      agentMessage('{"content":"answer"}', 'final_answer'),
+      turnCompleted('completed'),
+    )
+    await expect(result).resolves.toEqual({
+      output: [{ type: 'text', text: '{"content":"answer"}' }],
+      stopReason: 'completed',
+    })
+    wire.close()
+  })
+
+  it('collects only active-turn Web searches and returns deep-detached snapshots', async () => {
+    const { child, wire } = await initializeWire()
+    const result = wire.runTurn(['task'], new AbortController().signal)
+    const turnStart = await child.peer.nextMethod('turn/start')
+    child.peer.send(
+      webSearch('wrong thread', { threadId: 'thread-2' }),
+      webSearch('early query', {
+        action: { type: 'search', queries: ['early query'] },
+        results: [{ url: 'https://early.example/' }],
+      }),
+    )
+    child.peer.respond(turnStart, { turn: { id: 'turn-1' } })
+    await nextTask()
+    child.peer.send(
+      webSearch('wrong turn', { turnId: 'turn-2' }),
+      webSearch('active query', {
+        action: { type: 'openPage', url: 'https://active.example/' },
+        results: [{ url: 'https://active.example/', metadata: { rank: 1 } }],
+      }),
+      webSearch('bare query'),
+      agentMessage('answer', 'final_answer'),
+      turnCompleted('completed'),
+    )
+    await expect(result).resolves.toMatchObject({ stopReason: 'completed' })
+
+    expect(wire.collectWebSearches()).toEqual([
+      {
+        query: 'early query',
+        action: { type: 'search', queries: ['early query'] },
+        results: [{ url: 'https://early.example/' }],
+      },
+      {
+        query: 'active query',
+        action: { type: 'openPage', url: 'https://active.example/' },
+        results: [{ url: 'https://active.example/', metadata: { rank: 1 } }],
+      },
+      { query: 'bare query' },
+    ])
+    const mutable = wire.collectWebSearches() as unknown as Array<{
+      action?: { queries?: string[] }
+      results?: Array<{ metadata?: { rank: number } }>
+    }>
+    mutable.splice(1)
+    mutable[0]!.action!.queries![0] = 'mutated query'
+    mutable[0]!.results![0]!.metadata = { rank: 99 }
+    expect(wire.collectWebSearches()).toEqual([
+      {
+        query: 'early query',
+        action: { type: 'search', queries: ['early query'] },
+        results: [{ url: 'https://early.example/' }],
+      },
+      {
+        query: 'active query',
+        action: { type: 'openPage', url: 'https://active.example/' },
+        results: [{ url: 'https://active.example/', metadata: { rank: 1 } }],
+      },
+      { query: 'bare query' },
+    ])
+    wire.close()
+  })
+
+  it('rejects an early Web search whose turn differs from turn/start', async () => {
+    const { child, wire } = await initializeWire()
+    const result = wire.runTurn(['task'], new AbortController().signal)
+    const turnStart = await child.peer.nextMethod('turn/start')
+    child.peer.send(webSearch('provisional query', { turnId: 'turn-provisional' }))
+    child.peer.respond(turnStart, { turn: { id: 'turn-response' } })
+    await expect(result).rejects.toThrow('did not match the active turn')
+    expect(wire.collectWebSearches()).toEqual([])
+    wire.close()
+  })
+
+  it.each([
+    [webSearch(42), 'invalid webSearch query'],
+    [webSearch('query', { action: [] }), 'invalid webSearch action'],
+    [webSearch('query', { results: {} }), 'invalid webSearch results'],
+  ])('rejects malformed completed Web-search items', async (notification, message) => {
+    const { child, wire } = await initializeWire()
+    const result = wire.runTurn(['task'], new AbortController().signal)
+    const turnStart = await child.peer.nextMethod('turn/start')
+    child.peer.respond(turnStart, { turn: { id: 'turn-1' } })
+    await nextTask()
+    child.peer.send(notification)
+    await expect(result).rejects.toThrow(message)
     wire.close()
   })
 
